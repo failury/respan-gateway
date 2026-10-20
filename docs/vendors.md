@@ -62,7 +62,8 @@ Gemini's OpenAI-compatible endpoint
 `openai-chat`). Anthropic's does not: `https://api.anthropic.com`. The media
 formats (`openai-images`, `openai-transcriptions`, `openai-speech`,
 `openai-videos`, `openai-embeddings`) and `openai-responses` take the same
-base URL as `openai-chat`. Gemini's own formats, `gemini-generate`
+base URL as `openai-chat`, except Gemini images: its `openai-images`
+provider uses native `generateContent` at the Gemini API root. Gemini's own formats, `gemini-generate`
 (`generateContent` and `streamGenerateContent`, the model in the path) and
 `gemini-veo`, take `https://generativelanguage.googleapis.com/v1beta` with
 the key in `x-goog-api-key`. Session formats take a `wss://` URL as their

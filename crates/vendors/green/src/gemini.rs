@@ -1,6 +1,6 @@
-//! Google's Gemini API: Chat Completions, images and embeddings at its
-//! OpenAI-compatible base, and its own API beside it: `generateContent`,
-//! Gemini Live and Veo.
+//! Google's Gemini API: Chat Completions and embeddings at its
+//! OpenAI-compatible base, and its own API beside it: `generateContent`
+//! for conversations and images, Gemini Live and Veo.
 
 use std::borrow::Cow;
 
@@ -12,8 +12,8 @@ use serde_json::{Map, Value, json};
 
 use respan_gateway_conversation_http::gemini::{GeminiGenerate, needs_signatures};
 use respan_gateway_conversation_http::openai::OpenAiChat;
-use respan_gateway_media_http::gemini::GeminiVeo;
-use respan_gateway_media_http::openai::{OpenAiEmbeddings, OpenAiImages};
+use respan_gateway_media_http::gemini::{GeminiImages, GeminiVeo};
+use respan_gateway_media_http::openai::OpenAiEmbeddings;
 use respan_gateway_realtime_ws::GeminiLive;
 
 use respan_gateway_vendor_kit::{
@@ -42,7 +42,7 @@ pub const VENDOR: Vendor = Vendor {
         (&GeminiGenerate, Some(API)),
         (&Dialected::new(OpenAiChat, Gemini), Some(OPENAI_API)),
         (&GeminiLive, Some(LIVE)),
-        (&OpenAiImages, Some(OPENAI_API)),
+        (&GeminiImages, Some(API)),
         (&GeminiVeo, Some(API)),
         (&OpenAiEmbeddings, Some(OPENAI_API)),
     ],
@@ -161,4 +161,26 @@ fn list_models(p: &VendorProvider) -> BoxFuture<'_, Models> {
         };
         Ok(models.filter_map(model).collect())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use respan_gateway_media_http::openai::OpenAiImages;
+
+    #[test]
+    fn images_use_the_native_api_and_header_key_beside_existing_veo() {
+        for name in [OpenAiImages::NAME, GeminiVeo::NAME] {
+            let (format, base) = VENDOR
+                .formats
+                .iter()
+                .find(|(format, _)| format.name() == name)
+                .expect("registered format");
+            assert_eq!(*base, Some(API));
+            assert!(matches!(
+                format.key(),
+                respan_gateway_vendor_kit::KeyIn::Header("x-goog-api-key")
+            ));
+        }
+    }
 }

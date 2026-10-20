@@ -1,7 +1,10 @@
-//! Google's Veo as the Gemini API serves it, over HTTP: a provider format
-//! of the [`video`](respan_gateway_media::video) kind, [`GeminiVeo`]. A provider's base URL
+//! Google's native image generation ([`GeminiImages`]) and Veo
+//! ([`GeminiVeo`]) over HTTP. A provider's base URL
 //! includes the version, `https://generativelanguage.googleapis.com/v1beta`,
 //! and its transport the key, `x-goog-api-key`.
+
+mod images;
+pub use images::GeminiImages;
 
 use crate::edge::{bind_provider, content, sends};
 use base64::Engine;
