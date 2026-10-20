@@ -449,7 +449,7 @@ where
 }
 
 /// Set a call's path and content type.
-fn post_to(head: &mut RequestHead, path: &str, content_type: &str) -> Result<(), Fault> {
+pub(super) fn post_to(head: &mut RequestHead, path: &str, content_type: &str) -> Result<(), Fault> {
     respan_gateway_http::path::set_path(head, path)?;
     let content_type = HeaderValue::from_str(content_type)
         .map_err(|e| Fault::internal("a content type is no header").with_source(e))?;
