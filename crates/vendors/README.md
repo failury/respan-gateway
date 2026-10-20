@@ -56,7 +56,10 @@ What a spec says, and what its own vendor does, such as Anthropic's key in
 `x-api-key`, OpenAI Realtime's transcription model or Gemini's thought
 signatures in `generateContent`, is the spec's, in its format
 (`AnthropicMessages`, `OpenAiRealtime`, `GeminiGenerate`), not a quirk. Each quirk
-is described where its file handles it.
+is described where its file handles it. OpenRouter's Images and Videos dialects
+reuse `respan_gateway_media_http::dialect` for the OpenAI codecs and HTTP
+framing; their vendor-specific paths, fields and response normalization stay
+in `yellow/src/openrouter.rs`.
 
 A vendor is one file in its tier's crate, a line in that crate's `ALL`, and
 one in this crate's `ALL` and module list. A provider of no vendor speaks

@@ -201,7 +201,7 @@ fn post(
 
 /// The fields of a call but its images: its typed fields, then its native
 /// ones.
-pub(crate) fn fields(input: &Input, stream: bool) -> Result<Map<String, Value>, Fault> {
+pub fn fields(input: &Input, stream: bool) -> Result<Map<String, Value>, Fault> {
     let mut v = Map::new();
     set(&mut v, "model", input.model.clone());
     v.insert("prompt".into(), input.prompt.clone().into());
@@ -256,7 +256,7 @@ impl Decoder<Output> for Streamed {
 }
 
 /// The events of a whole JSON response.
-pub(crate) fn decode_whole(raw: Bytes, out: &mut Vec<Output>) -> Result<(), Fault> {
+pub fn decode_whole(raw: Bytes, out: &mut Vec<Output>) -> Result<(), Fault> {
     let v = whole_json(NAME, raw, |v| v["data"].is_array())?;
     let format = v["output_format"].as_str();
     let mut start = Start::new(v["created"].as_u64());
@@ -312,13 +312,14 @@ const EVENT_FIELDS: &[&str] = &[
 /// Reads a stream: its first event's other fields are its [`Start`]'s, and
 /// a later event keeps those it says otherwise.
 #[derive(Debug, Default)]
-pub(crate) struct Streamed {
+pub struct Streamed {
     shared: Option<Map<String, Value>>,
     done: bool,
 }
 
 impl Streamed {
-    pub(crate) fn event(&mut self, raw: &[u8], out: &mut Vec<Output>) -> Result<(), Fault> {
+    /// Read one SSE event, retaining shared fields and completion state.
+    pub fn event(&mut self, raw: &[u8], out: &mut Vec<Output>) -> Result<(), Fault> {
         let Some(v) = event_json(NAME, raw)? else {
             return Ok(());
         };
@@ -361,7 +362,8 @@ impl Streamed {
         read_usage_into(&v["usage"], out)
     }
 
-    pub(crate) fn end(&mut self) -> Result<(), Fault> {
+    /// Refuse a stream that ended without its completed event.
+    pub fn end(&mut self) -> Result<(), Fault> {
         match self.done {
             true => Ok(()),
             false => Err(Fault::truncated()),

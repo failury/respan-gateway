@@ -89,3 +89,8 @@ at `https://generativelanguage.googleapis.com/v1beta` with the key in
   operation's `error`, or, filtered, a response of
   `raiMediaFilteredReasons`; a refusal is Google's `{"error": {code,
   message, status}}`. Veo reports no progress: an operation is done or not.
+
+Vendor-specific media dialects live in `crates/vendors`, not in this crate.
+The `dialect` module exposes the existing provider binder and spec codecs so
+vendors can adjust their wire while retaining shared error handling, framing
+and typed media events.

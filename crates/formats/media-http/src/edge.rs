@@ -14,7 +14,7 @@ use respan_gateway_media::video;
 /// decoder `decode` gives, given its head and the call as sent, its
 /// failure leniently. A format takes one value per call: live input is
 /// refused.
-pub(crate) fn bind_provider<I, O>(
+pub fn bind_provider<I, O>(
     io: ProviderIo,
     format: &'static str,
     encode: impl FnOnce(&mut RequestHead, &I) -> Result<Box<dyn Encoder<I>>, Fault> + Send + 'static,
@@ -39,7 +39,7 @@ where
 }
 
 /// The encoder of a call whose body is `body`.
-pub(crate) fn sends<I: 'static>(body: Bytes) -> Box<dyn Encoder<I>> {
+pub fn sends<I: 'static>(body: Bytes) -> Box<dyn Encoder<I>> {
     Box::new(move |_: &I, out: &mut Vec<Bytes>| {
         out.push(body.clone());
         Ok(())
@@ -47,7 +47,7 @@ pub(crate) fn sends<I: 'static>(body: Bytes) -> Box<dyn Encoder<I>> {
 }
 
 /// The content of a video, chunk by chunk as it comes.
-pub(crate) fn content() -> Box<dyn Decoder<video::Output>> {
+pub fn content() -> Box<dyn Decoder<video::Output>> {
     Box::new(|bytes: Bytes, out: &mut Vec<video::Output>| {
         out.push(video::Output::Content(bytes));
         Ok(())

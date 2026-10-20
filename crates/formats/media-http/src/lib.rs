@@ -6,8 +6,7 @@
 //! - [`gemini`]: Google's Veo, as the Gemini API serves it, a provider of
 //!   the video kind.
 
+pub mod dialect;
 mod edge;
 pub mod gemini;
 pub mod openai;
-
-pub mod openrouter;

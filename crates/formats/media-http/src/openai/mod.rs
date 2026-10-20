@@ -329,7 +329,7 @@ fn unb64(text: &str) -> Option<Bytes> {
 }
 
 /// `v` as JSON bytes.
-pub(crate) fn json_bytes(v: &Map<String, Value>) -> Result<Bytes, Fault> {
+pub fn json_bytes(v: &Map<String, Value>) -> Result<Bytes, Fault> {
     serde_json::to_vec(v)
         .map(Bytes::from)
         .map_err(|e| Fault::internal("a body could not be written").with_source(e))
@@ -337,14 +337,14 @@ pub(crate) fn json_bytes(v: &Map<String, Value>) -> Result<Bytes, Fault> {
 
 /// One server-sent event of `v`, without a name, as OpenAI's SDKs read it
 /// by its `type`.
-pub(crate) fn sse_event(v: &Value) -> String {
+pub fn sse_event(v: &Value) -> String {
     respan_gateway_sse::event(None, v)
 }
 
 /// The JSON of a provider's stream event `raw` of `format`: `None` for one
 /// with no data or `[DONE]`; data that is no JSON as a string; an error
 /// event as its fault.
-pub(crate) fn event_json(_format: &str, raw: &[u8]) -> Result<Option<Value>, Fault> {
+pub fn event_json(_format: &str, raw: &[u8]) -> Result<Option<Value>, Fault> {
     let Some(data) = respan_gateway_sse::event_data(raw) else {
         return Ok(None);
     };
@@ -449,7 +449,7 @@ where
 }
 
 /// Set a call's path and content type.
-pub(crate) fn post_to(head: &mut RequestHead, path: &str, content_type: &str) -> Result<(), Fault> {
+pub fn post_to(head: &mut RequestHead, path: &str, content_type: &str) -> Result<(), Fault> {
     respan_gateway_http::path::set_path(head, path)?;
     let content_type = HeaderValue::from_str(content_type)
         .map_err(|e| Fault::internal("a content type is no header").with_source(e))?;
@@ -460,11 +460,7 @@ pub(crate) fn post_to(head: &mut RequestHead, path: &str, content_type: &str) ->
 /// Whether a provider is asked to stream: as the call's [`StreamResponse`]
 /// says, else as the client's request did, if to one of `paths`, by
 /// `wants`, else not.
-pub(crate) fn streams(
-    io: &ProviderIo,
-    paths: &[&str],
-    wants: fn(&Map<String, Value>) -> bool,
-) -> bool {
+pub fn streams(io: &ProviderIo, paths: &[&str], wants: fn(&Map<String, Value>) -> bool) -> bool {
     if let Some(StreamResponse(stream)) = io.extensions().get::<StreamResponse>() {
         return *stream;
     }
