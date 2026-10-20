@@ -1,7 +1,5 @@
-//! Native Gemini image generation, served to OpenAI Images clients.
+//! Google's native image API as a vendor dialect of OpenAI Images.
 
-use crate::edge::{bind_provider, sends};
-use crate::openai::{self, OpenAiImages};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use respan_gateway_conversation::{Media, MediaSource, Usage};
@@ -11,6 +9,8 @@ use respan_gateway_http::bytes::Bytes;
 use respan_gateway_http::http::request::Parts as RequestHead;
 use respan_gateway_http::{Connect, Encoder, KeyIn, ProviderIo, Upstream, Whole};
 use respan_gateway_media::image::{Image, Input, Output, Start};
+use respan_gateway_media_http::dialect::{bind_provider, post_to, sends};
+use respan_gateway_media_http::openai::OpenAiImages;
 use serde_json::{Map, Value, json};
 
 /// Gemini's `generateContent` image API, using the canonical Images kind.
@@ -115,7 +115,7 @@ fn call(head: &mut RequestHead, input: &Input) -> Result<Box<dyn Encoder<Input>>
         .remove(b'_')
         .remove(b'~');
     let model = percent_encoding::utf8_percent_encode(model, PATH_SEGMENT);
-    openai::post_to(
+    post_to(
         head,
         &format!("/models/{model}:generateContent"),
         "application/json",

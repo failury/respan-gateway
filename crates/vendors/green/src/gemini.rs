@@ -12,7 +12,10 @@ use serde_json::{Map, Value, json};
 
 use respan_gateway_conversation_http::gemini::{GeminiGenerate, needs_signatures};
 use respan_gateway_conversation_http::openai::OpenAiChat;
-use respan_gateway_media_http::gemini::{GeminiImages, GeminiVeo};
+use respan_gateway_media_http::gemini::GeminiVeo;
+
+mod images;
+use images::GeminiImages;
 use respan_gateway_media_http::openai::OpenAiEmbeddings;
 use respan_gateway_realtime_ws::GeminiLive;
 

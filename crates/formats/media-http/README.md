@@ -90,9 +90,6 @@ at `https://generativelanguage.googleapis.com/v1beta` with the key in
   `raiMediaFilteredReasons`; a refusal is Google's `{"error": {code,
   message, status}}`. Veo reports no progress: an operation is done or not.
 
-`gemini::GeminiImages` serves the `openai-images` kind through native
-`/models/{model}:generateContent` at the Gemini API root, using
-`x-goog-api-key`. It returns final images, excludes thought previews, and
-preserves image MIME types and token modality details. It accepts one image
-per request, inline or URL reference images, `quality: "auto"`, `aspect_ratio`,
-and common sizes as aspect ratios; masks and unsupported controls are refused.
+Vendor dialects use the format-neutral helpers in `dialect`; provider-specific
+wire translation belongs in `crates/vendors`, while this crate owns the specs.
+Google's native image adapter is the Gemini vendor's dialect of OpenAI Images.

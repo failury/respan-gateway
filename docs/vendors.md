@@ -63,7 +63,13 @@ Gemini's OpenAI-compatible endpoint
 formats (`openai-images`, `openai-transcriptions`, `openai-speech`,
 `openai-videos`, `openai-embeddings`) and `openai-responses` take the same
 base URL as `openai-chat`, except Gemini images: its `openai-images`
-provider uses native `generateContent` at the Gemini API root. Gemini's own formats, `gemini-generate`
+dialect uses native `generateContent` at the Gemini API root. The vendor
+owns this translation; the image kind and OpenAI client contract stay the same. It returns final
+images, excludes thought previews, and preserves image MIME types and token
+modality/cache/reasoning details. One image is requested per call; source images
+can be inline or URLs, `quality` must be `auto`, and `aspect_ratio` or common
+1024x1024, 1536x1024 and 1024x1536 sizes select the native aspect ratio. Masks
+and unsupported controls are refused before a provider call. Gemini's own formats, `gemini-generate`
 (`generateContent` and `streamGenerateContent`, the model in the path) and
 `gemini-veo`, take `https://generativelanguage.googleapis.com/v1beta` with
 the key in `x-goog-api-key`. Session formats take a `wss://` URL as their
