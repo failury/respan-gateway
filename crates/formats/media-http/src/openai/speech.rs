@@ -119,7 +119,11 @@ fn post(
     v.insert("input".into(), input.text.clone().into());
     set(&mut v, "voice", input.voice.clone());
     set(&mut v, "instructions", input.instructions.clone());
-    set(&mut v, "response_format", input.audio_format.clone());
+    set(
+        &mut v,
+        "response_format",
+        Some(input.audio_format.as_deref().unwrap_or("mp3")),
+    );
     set(&mut v, "speed", input.speed);
     merge_missing(&mut v, &kept(NAME, &input.native)?);
     if stream {
@@ -257,5 +261,24 @@ impl Encoder<Output> for StreamEncoder {
 
     fn end(&mut self, end: Result<(), Fault>, frames: &mut Vec<Bytes>) -> Result<(), Fault> {
         crate::edge::frame(frames, |out| self.end_into(&end, out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_audio_format_matches_the_clients_mp3_default_or_explicit_format() {
+        for format in [None, Some("pcm"), Some("wav")] {
+            let mut input = Input::new("hello");
+            input.audio_format = format.map(str::to_owned);
+            let mut head = http::Request::new(()).into_parts().0;
+            let mut encoder = post(&mut head, &input, false).expect("speech call");
+            let mut bytes = Vec::new();
+            encoder.encode(&input, &mut bytes).expect("request");
+            let request: Value = serde_json::from_slice(&bytes.concat()).expect("JSON");
+            assert_eq!(request["response_format"], format.unwrap_or("mp3"));
+        }
     }
 }

@@ -321,7 +321,7 @@ fn read_response(sent: &http::Request<Bytes>) -> Box<dyn Decoder<Output>> {
 }
 
 /// The events of a whole JSON answer: a job, a page of jobs, or a deletion.
-fn decode_whole(raw: Bytes, out: &mut Vec<Output>) -> Result<(), Fault> {
+pub(crate) fn decode_whole(raw: Bytes, out: &mut Vec<Output>) -> Result<(), Fault> {
     let v = whole_json(NAME, raw, |v| {
         matches!(
             v["object"].as_str(),
