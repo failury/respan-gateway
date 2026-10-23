@@ -12,6 +12,7 @@ pub mod mistral;
 pub mod ollama;
 pub mod openrouter;
 pub mod perplexity;
+pub mod soniox;
 pub mod together;
 pub mod vllm;
 pub mod xai;
@@ -33,4 +34,5 @@ pub const ALL: &[&Vendor] = &[
     &cloudflare::VENDOR,
     &cerebras::VENDOR,
     &perplexity::VENDOR,
+    &soniox::VENDOR,
 ];

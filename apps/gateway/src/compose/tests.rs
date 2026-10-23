@@ -829,3 +829,71 @@ async fn a_vendor_sends_a_chat_to_a_model_its_chat_format_refuses_in_another() {
         );
     }
 }
+
+#[test]
+fn soniox_serves_openai_audio_clients_through_its_native_rest_formats() {
+    let plan = plan("providers = { s = { vendor = \"soniox\", key = \"test-key\" } }\n")
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(plan.serves("openai-transcriptions"));
+    assert!(plan.serves("openai-speech"));
+    assert!(!plan.serves("soniox-speech"));
+    assert!(!plan.serves("soniox-transcriptions"));
+    assert_eq!(plan.upstreams.len(), 1);
+    let entries = &plan.upstreams[0].entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].format, "soniox-transcriptions");
+    assert_eq!(entries[0].base_url, "https://api.soniox.com/v1");
+    assert_eq!(entries[1].format, "soniox-speech");
+    assert_eq!(entries[1].base_url, "https://tts-rt.soniox.com");
+    for part in plan.upstreams[0].provider.parts().expect("parts") {
+        assert_eq!(part.headers["authorization"], "Bearer test-key");
+    }
+}
+
+#[tokio::test]
+async fn soniox_speech_uses_its_configured_vendor_over_a_real_socket() {
+    let (seen, mut calls) = tokio::sync::mpsc::unbounded_channel();
+    let upstream = axum::Router::new().route(
+        "/tts",
+        axum::routing::post(
+            move |headers: http::HeaderMap, axum::Json(body): axum::Json<serde_json::Value>| {
+                let seen = seen.clone();
+                async move {
+                    assert_eq!(headers["authorization"], "Bearer local-soniox-key");
+                    seen.send(body).expect("captured request");
+                    (
+                        [(http::header::CONTENT_TYPE, "audio/wav")],
+                        b"RIFFsoniox-audio".as_slice(),
+                    )
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await });
+    let gateway = resolve(&format!(
+        "providers = {{ s = {{ vendor = \"soniox\", key = \"local-soniox-key\", formats = {{ \"soniox-speech\" = \"http://{address}\" }} }} }}\n"
+    )).unwrap_or_else(|error| panic!("{error}"));
+    let body = serde_json::json!({
+        "model": "s/tts-rt-v2", "input": "Hello", "voice": "Adrian",
+        "language": "en", "response_format": "wav"
+    });
+    let (response, _) = serve(&gateway, post("/v1/audio/speech", body.to_string())).await;
+    let (status, headers, body) = read_whole(response).await;
+    assert_eq!(status, StatusCode::OK, "{body:?}");
+    assert_eq!(headers["content-type"], "audio/wav");
+    assert_eq!(body.expect("audio"), "RIFFsoniox-audio");
+    assert_eq!(
+        calls.recv().await,
+        Some(serde_json::json!({
+            "model": "tts-rt-v2", "text": "Hello", "voice": "Adrian",
+            "language": "en", "audio_format": "wav"
+        }))
+    );
+    gateway.idle().await;
+    server.abort();
+    let _ = server.await;
+}

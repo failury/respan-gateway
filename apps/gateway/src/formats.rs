@@ -20,6 +20,7 @@ use respan_gateway_media_http::gemini::{GeminiImages, GeminiVeo};
 use respan_gateway_media_http::openai::{
     OpenAiEmbeddings, OpenAiImages, OpenAiSpeech, OpenAiTranscriptions, OpenAiVideos,
 };
+use respan_gateway_media_http::soniox::{SonioxSpeech, SonioxTranscriptions};
 use respan_gateway_passthrough_http::Passthrough;
 use respan_gateway_plugin_routing::{Model, Routes};
 use respan_gateway_realtime as realtime;
@@ -105,7 +106,7 @@ impl KnownFormat {
         O: Clone + Send + Sync + 'static,
     {
         let client = format.clone();
-        let mut known = Self::provider_only(kind, &format);
+        let mut known = Self::provider_only(kind, <F as Format<ClientIo, I, O>>::name(&format));
         known.endpoints = endpoints.iter().map(|e| (*e).to_owned()).collect();
         known.serve = Some(Box::new(move |gateway, _| {
             gateway.client::<I, O, _>(client.clone())
@@ -140,13 +141,10 @@ impl KnownFormat {
         known
     }
 
-    /// `format` of `kind`, which only providers speak.
-    pub fn provider_only<F, I, O>(kind: &'static str, format: &F) -> Self
-    where
-        F: Format<ProviderIo, O, I>,
-    {
+    /// Format `name` of `kind`, which only providers speak.
+    pub fn provider_only(kind: &'static str, name: &str) -> Self {
         Self {
-            name: format.name().to_owned(),
+            name: name.to_owned(),
             kind,
             endpoints: Vec::new(),
             websocket: false,
@@ -250,6 +248,11 @@ pub fn formats() -> Vec<KnownFormat> {
         )),
         KnownFormat::of(kind::SPEECH, endpoints::SPEECH, OpenAiSpeech)
             .model(Model::of(speech::Input::model, speech::Input::set_model)),
+        KnownFormat::provider_only(kind::SPEECH, SonioxSpeech::NAME)
+            .model(Model::of(speech::Input::model, speech::Input::set_model)),
+        KnownFormat::provider_only(kind::TRANSCRIPTION, SonioxTranscriptions::NAME).model(
+            Model::of(transcription::Input::model, transcription::Input::set_model),
+        ),
         // Only a `Create` names a model; a follow-up goes by its job's id
         // ([`crate::jobs`]).
         KnownFormat::of(kind::VIDEO, endpoints::VIDEOS, OpenAiVideos)
