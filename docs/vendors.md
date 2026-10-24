@@ -47,6 +47,7 @@ Each vendor is in one of two tiers:
 | <img src="assets/vendors/cloudflare.svg" width="20" height="20" alt=""> | Cloudflare | `cloudflare` | `CLOUDFLARE_API_TOKEN` | `openai-chat`, `openai-embeddings` |
 | <img src="assets/vendors/cerebras.svg" width="20" height="20" alt=""> | Cerebras | `cerebras` | `CEREBRAS_API_KEY` | `openai-chat` |
 | <img src="assets/vendors/perplexity.svg" width="20" height="20" alt=""> | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | `openai-responses` |
+| <img src="assets/vendors/deepinfra.svg" width="20" height="20" alt=""> | DeepInfra | `deepinfra` | `DEEPINFRA_API_KEY` | `openai-chat`, `openai-images`, `openai-embeddings`, `openai-speech`, `openai-transcriptions` |
 
 | | Soniox | `soniox` | `SONIOX_API_KEY` | `soniox-transcriptions`, `soniox-speech`, `soniox-realtime` |
 
@@ -81,7 +82,7 @@ speech-to-text, with no conversational or speech-generation session.
 A provider's `base_url` is the one its own SDK takes. OpenAI-compatible ones
 include the version: `https://api.openai.com/v1`,
 `https://api.groq.com/openai/v1`, `https://openrouter.ai/api/v1`,
-`https://api.cerebras.ai/v1`, and
+`https://api.cerebras.ai/v1`, `https://api.deepinfra.com/v1/openai`, and
 Gemini's OpenAI-compatible endpoint
 `https://generativelanguage.googleapis.com/v1beta/openai` (all
 `openai-chat`). Anthropic's does not: `https://api.anthropic.com`. The media
