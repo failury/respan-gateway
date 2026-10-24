@@ -136,7 +136,9 @@ formats behind the existing OpenAI audio client formats. Speech maps to
 `POST /tts`, returns raw audio, and requires a native `language` field.
 MP3 and WAV pass through; PCM is signed 16-bit little-endian at 24 kHz mono.
 File transcription internally uploads, creates and polls a Soniox async job,
-then returns a completed JSON/text transcript and duration. No public job
-API, translation or realtime support is added. Each internal HTTP request
+then returns a completed JSON/text transcript and duration. The existing
+`/audio/translations` endpoint requests English translation and returns only
+English result tokens, including already-English speech. No public job
+API is added. Live transcription has its own `soniox-realtime` WebSocket format. Each internal HTTP request
 uses the host-supplied transport and credentials. Provider-end cleanup is
 bounded; a Soniox job still processing cannot immediately be deleted.

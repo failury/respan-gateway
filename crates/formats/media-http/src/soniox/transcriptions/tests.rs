@@ -183,12 +183,11 @@ fn request(fields: &[(&str, &str)], path: &str) -> http::Request<Body> {
 }
 
 async fn send(gateway: &Gateway, fields: &[(&str, &str)]) -> (StatusCode, Bytes) {
-    let (answer, _) = respan_gateway_http::handle(
-        gateway,
-        request(fields, "/v1/audio/transcriptions"),
-        1 << 20,
-    )
-    .await;
+    send_to(gateway, fields, "/v1/audio/transcriptions").await
+}
+
+async fn send_to(gateway: &Gateway, fields: &[(&str, &str)], path: &str) -> (StatusCode, Bytes) {
+    let (answer, _) = respan_gateway_http::handle(gateway, request(fields, path), 1 << 20).await;
     let status = answer.status();
     let body = answer
         .into_body()
@@ -242,20 +241,13 @@ async fn unsupported_requests_fail_before_any_upload() {
         vec![("timestamp_granularities[]", "word")],
         vec![("unexpected", "value")],
     ] {
-        let fake = Fake::default();
-        let (status, _) = send(&fake.gateway(), &fields).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST, "{fields:?}");
-        assert!(fake.seen.lock().expect("seen").is_empty());
+        for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+            let fake = Fake::default();
+            let (status, _) = send_to(&fake.gateway(), &fields, path).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{fields:?}");
+            assert!(fake.seen.lock().expect("seen").is_empty());
+        }
     }
-    let fake = Fake::default();
-    let gateway = fake.gateway();
-    let (answer, _) =
-        respan_gateway_http::handle(&gateway, request(&[], "/v1/audio/translations"), 1 << 20)
-            .await;
-    assert_eq!(answer.status(), StatusCode::BAD_REQUEST);
-    drop(answer);
-    gateway.idle().await;
-    assert!(fake.seen.lock().expect("seen").is_empty());
 }
 
 #[tokio::test]
@@ -300,14 +292,16 @@ async fn failed_create_cleans_only_the_owned_file_and_never_retries() {
 
 #[tokio::test(start_paused = true)]
 async fn terminal_job_error_cleans_job_and_file() {
-    let mut steps = success_steps("unused");
-    steps[2].answer = json!({"status": "error", "error_type": "audio_decode_failed"});
-    steps.drain(3..5);
-    let fake = Fake::new(steps);
-    let (status, body) = send(&fake.gateway(), &[]).await;
-    assert_eq!(status, StatusCode::BAD_GATEWAY);
-    assert!(String::from_utf8_lossy(&body).contains("audio_decode_failed"));
-    fake.finished();
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        let mut steps = success_steps("unused");
+        steps[2].answer = json!({"status": "error", "error_type": "audio_decode_failed"});
+        steps.drain(3..5);
+        let fake = Fake::new(steps);
+        let (status, body) = send_to(&fake.gateway(), &[], path).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(String::from_utf8_lossy(&body).contains("audio_decode_failed"));
+        fake.finished();
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -469,8 +463,16 @@ async fn overall_deadline_and_processing_cleanup_are_bounded_without_duplicate_j
 
 #[tokio::test]
 async fn real_http_transport_authenticates_every_internal_request_over_a_socket() {
+    socket_response(false).await;
+    socket_response(true).await;
+}
+
+async fn socket_response(translate: bool) {
     let mut steps = success_steps("Socket transcript");
     steps.remove(2);
+    if translate {
+        steps[3].answer = translation_transcript();
+    }
     let fake = Fake::new(steps);
     let upstream = fake.clone();
     let router = axum::Router::new().fallback(move |request: axum::extract::Request| {
@@ -522,13 +524,95 @@ async fn real_http_transport_authenticates_every_internal_request_over_a_socket(
         .plugin(Byok)
         .target("soniox")
         .expect("target");
-    let (status, body) = send(&gateway, &[]).await;
+    let path = if translate {
+        "/v1/audio/translations"
+    } else {
+        "/v1/audio/transcriptions"
+    };
+    let (status, body) = send_to(&gateway, &[], path).await;
     assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     assert_eq!(
         serde_json::from_slice::<Value>(&body).expect("json")["text"],
-        "Socket transcript"
+        if translate {
+            "Hello world. Already English."
+        } else {
+            "Socket transcript"
+        }
     );
     fake.finished();
     assert_eq!(fake.seen.lock().expect("seen").len(), 6);
     server.abort();
+}
+
+fn translation_transcript() -> Value {
+    json!({"text": "Hola mundo.Hello world. Already English.", "tokens": [
+        {"text": "Hola mundo.", "translation_status": "original", "language": "es"},
+        {"text": "Hello", "translation_status": "translation", "language": "en"},
+        {"text": " world.", "translation_status": "translation", "language": "en"},
+        {"text": "bonjour", "translation_status": "none", "language": "fr"},
+        {"text": " Already English.", "translation_status": "none", "language": "en"}
+    ]})
+}
+
+#[tokio::test(start_paused = true)]
+async fn translation_returns_only_english_in_order_as_json_or_text_with_duration_and_cleanup() {
+    for format in ["json", "text"] {
+        let mut steps = success_steps("unused mixed transcript");
+        steps[4].answer = translation_transcript();
+        let fake = Fake::new(steps);
+        let (status, body) = send_to(
+            &fake.gateway(),
+            &[("response_format", format)],
+            "/v1/audio/translations",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        if format == "json" {
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).expect("json"),
+                json!({
+                    "text": "Hello world. Already English.", "duration": 1.25,
+                    "usage": {"type": "duration", "seconds": 1.25}
+                })
+            );
+        } else {
+            assert_eq!(body.as_ref(), b"Hello world. Already English.");
+        }
+        let seen = fake.seen.lock().expect("seen");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&seen[1].2).expect("create"),
+            json!({
+                "model": "stt-async-v5", "file_id": FILE,
+                "translation": {"type": "one_way", "target_language": "en"}
+            })
+        );
+        drop(seen);
+        fake.finished();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn translation_silence_is_valid_but_missing_or_invalid_english_tokens_fail_with_cleanup() {
+    for (transcript, expected) in [
+        (json!({"tokens": []}), StatusCode::OK),
+        (
+            json!({"text": "must not fall back"}),
+            StatusCode::BAD_GATEWAY,
+        ),
+        (
+            json!({"tokens": [{"text": "Hola", "translation_status": "original", "language": "es"}]}),
+            StatusCode::BAD_GATEWAY,
+        ),
+        (
+            json!({"tokens": [{"text": 123, "translation_status": "translation"}]}),
+            StatusCode::BAD_GATEWAY,
+        ),
+    ] {
+        let mut steps = success_steps("unused");
+        steps[4].answer = transcript;
+        let fake = Fake::new(steps);
+        let (status, _) = send_to(&fake.gateway(), &[], "/v1/audio/translations").await;
+        assert_eq!(status, expected);
+        fake.finished();
+    }
 }

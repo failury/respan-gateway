@@ -73,6 +73,6 @@ mod tests {
         );
         assert!(YELLOW.iter().any(|vendor| vendor.id == soniox::ID));
         assert!(!GREEN.iter().any(|vendor| vendor.id == soniox::ID));
-        assert_eq!(find(soniox::ID).map(|vendor| vendor.formats.len()), Some(2));
+        assert_eq!(find(soniox::ID).map(|vendor| vendor.formats.len()), Some(3));
     }
 }

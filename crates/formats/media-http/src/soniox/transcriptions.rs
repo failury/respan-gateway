@@ -35,7 +35,8 @@ const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 ///
 /// One call uploads its file, creates a job, waits up to ten minutes, and
 /// returns its completed transcript. Only JSON and text responses are served;
-/// streaming, translation and sampling parameters are refused before upload.
+/// streaming and sampling parameters are refused before upload. Translation
+/// returns English tokens, without the original foreign-language transcript.
 /// Every internal request uses the caller-supplied transport and credentials.
 /// Owned jobs and files are removed by the provider's end hook, including when
 /// the client leaves. Cleanup is bounded: a still-processing job cannot be
@@ -121,6 +122,7 @@ struct Prepared {
     upload: Bytes,
     content_type: String,
     request: Value,
+    translate: bool,
 }
 
 fn prepare(input: &Input, extensions: &Extensions) -> Result<Prepared> {
@@ -135,9 +137,9 @@ fn prepare(input: &Input, extensions: &Extensions) -> Result<Prepared> {
                     .and_then(Value::as_str)
                     .is_some_and(|s| s.eq_ignore_ascii_case("true"))
         });
-    if streaming || input.task != Task::Transcribe || input.temperature.is_some() {
+    if streaming || input.temperature.is_some() {
         return Err(Fault::bad_request(
-            "Soniox supports non-streamed transcription without temperature or translation",
+            "Soniox supports non-streamed transcription or translation without temperature",
         ));
     }
     if let Some(native) = &input.native {
@@ -173,7 +175,11 @@ fn prepare(input: &Input, extensions: &Extensions) -> Result<Prepared> {
         audio,
     );
     let content_type = form.content_type();
+    let translate = input.task == Task::Translate;
     let mut request = json!({"model": model});
+    if translate {
+        request["translation"] = json!({"type": "one_way", "target_language": "en"});
+    }
     if let Some(language) = &input.language {
         request["language_hints"] = json!([language]);
     }
@@ -184,6 +190,7 @@ fn prepare(input: &Input, extensions: &Extensions) -> Result<Prepared> {
         upload: form.finish(),
         content_type,
         request,
+        translate,
     })
 }
 
@@ -248,10 +255,15 @@ async fn transcribe(io: &Io, mut prepared: Prepared) -> Result<Vec<Output>> {
     )
     .await?
     .json()?;
-    let text = transcript
-        .get("text")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Fault::upstream("Soniox returned a transcript without text"))?;
+    let text = if prepared.translate {
+        translated_text(&transcript)?
+    } else {
+        transcript
+            .get("text")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Fault::upstream("Soniox returned a transcript without text"))?
+            .to_owned()
+    };
     let millis = state
         .get("audio_duration_ms")
         .and_then(Value::as_u64)
@@ -263,6 +275,33 @@ async fn transcribe(io: &Io, mut prepared: Prepared) -> Result<Vec<Output>> {
         Output::Seconds(seconds),
         Output::Transcript(transcript),
     ])
+}
+
+fn translated_text(transcript: &Value) -> Result<String> {
+    let invalid = || Fault::upstream("Soniox returned an invalid English translation");
+    let tokens = transcript
+        .get("tokens")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    let mut text = String::new();
+    for token in tokens {
+        let status = token.get("translation_status").and_then(Value::as_str);
+        if status == Some("translation")
+            || (status == Some("none")
+                && token.get("language").and_then(Value::as_str) == Some("en"))
+        {
+            text.push_str(
+                token
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .ok_or_else(invalid)?,
+            );
+        }
+    }
+    if !tokens.is_empty() && text.is_empty() {
+        return Err(invalid());
+    }
+    Ok(text)
 }
 
 fn resource_id(value: &Value) -> Result<String> {

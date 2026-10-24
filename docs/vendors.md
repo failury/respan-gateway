@@ -48,7 +48,7 @@ Each vendor is in one of two tiers:
 | <img src="assets/vendors/cerebras.svg" width="20" height="20" alt=""> | Cerebras | `cerebras` | `CEREBRAS_API_KEY` | `openai-chat` |
 | <img src="assets/vendors/perplexity.svg" width="20" height="20" alt=""> | Perplexity | `perplexity` | `PERPLEXITY_API_KEY` | `openai-responses` |
 
-| | Soniox | `soniox` | `SONIOX_API_KEY` | `soniox-transcriptions`, `soniox-speech` |
+| | Soniox | `soniox` | `SONIOX_API_KEY` | `soniox-transcriptions`, `soniox-speech`, `soniox-realtime` |
 
 These tables are kept by hand: a vendor added to `ALL` in
 [`crates/vendors`](../crates/vendors/README.md), or a format added to a
@@ -59,8 +59,8 @@ formats: file transcription uses `stt-async-v5`; speech uses `tts-rt-v2` and
 requires a Soniox voice such as `Adrian` and `language`, for example
 `extra_body={"language": "en"}` in the OpenAI Python SDK. Speech supports
 MP3 (default), WAV and 24-kHz signed 16-bit mono PCM; `speed` is 0.7–1.3.
-Transcription supports completed JSON or text results, not streaming,
-translations or realtime sessions. The gateway uploads the audio, waits for
+Transcription supports completed JSON or text results. `/v1/audio/translations`
+returns English text, excluding the original foreign-language tokens. The gateway uploads the audio, waits for
 Soniox's async job, fetches the transcript, then deletes the job and file.
 A job still processing after timeout or cancellation may remain at Soniox;
 cleanup is bounded and failures are logged. Exact token billing is not
@@ -69,7 +69,14 @@ reported by these immediate REST responses.
 ## Base URLs
 
 Soniox's native formats have separate origins: `https://api.soniox.com/v1`
-for transcription and `https://tts-rt.soniox.com` for speech.
+for transcription and `https://tts-rt.soniox.com` for speech. Realtime
+transcription and translation use `wss://stt-rt.soniox.com`, through the
+`soniox-realtime` format at `/transcribe-websocket?model=soniox/stt-rt-v5`.
+Authenticate the gateway handshake with its client key; provider keys are
+selected by the host. Send Soniox configuration as the first text frame,
+base64 audio as text frames, and an empty text frame to finish. Native
+translation configuration and token metadata are preserved; this is live
+speech-to-text, with no conversational or speech-generation session.
 
 A provider's `base_url` is the one its own SDK takes. OpenAI-compatible ones
 include the version: `https://api.openai.com/v1`,
