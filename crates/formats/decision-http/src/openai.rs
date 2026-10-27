@@ -449,7 +449,22 @@ fn answer(raw: &[u8], questions: &[Value], out: &mut Vec<Output>) -> Result<(), 
         } else {
             None
         };
-        result.native = tag(a.as_object().cloned().ok_or_else(bad)?);
+        let mut extra = a.as_object().cloned().ok_or_else(bad)?;
+        extra.remove("type");
+        extra.remove("confidence");
+        match &result.verdict {
+            Verdict::Noul(_) => {
+                extra.remove("probability");
+            }
+            Verdict::Choice { .. } => {
+                extra.remove("choice");
+            }
+            Verdict::Score { .. } => {
+                extra.remove("score");
+            }
+            _ => {}
+        }
+        result.native = tag(extra);
         out.push(Output::Answer(result));
     }
     if let Some(u) = v.get("usage") {
@@ -474,8 +489,32 @@ fn answer(raw: &[u8], questions: &[Value], out: &mut Vec<Output>) -> Result<(), 
         if let Some(x) = u["input_tokens_details"].get("cache_write_tokens") {
             usage.cache_write_input_tokens = x.as_u64().ok_or_else(bad)?;
         }
+        let mut extra = u.as_object().cloned().ok_or_else(bad)?;
+        extra.remove("input_tokens");
+        extra.remove("output_tokens");
+        if extra.contains_key("total_tokens") {
+            extra.insert("total_tokens".into(), Value::Null);
+        }
+        for (key, fields) in [
+            (
+                "input_tokens_details",
+                &["cached_tokens", "cache_write_tokens"][..],
+            ),
+            ("output_tokens_details", &["reasoning_tokens"][..]),
+        ] {
+            if let Some(Value::Object(details)) = extra.get_mut(key) {
+                for field in fields {
+                    if details.contains_key(*field) {
+                        details.insert((*field).into(), Value::Null);
+                    }
+                }
+            }
+        }
         out.push(Output::Usage(usage));
-        out.push(Output::native(OpenAiDecisions::NAME, json!({"usage": u})));
+        out.push(Output::native(
+            OpenAiDecisions::NAME,
+            json!({"usage": extra}),
+        ));
     }
     Ok(())
 }
@@ -544,6 +583,7 @@ impl OpenAiDecisions {
             }
             _ => return Err(Fault::bad_request("unsupported decision answer")),
         }
+        v.remove("confidence");
         set(&mut v, "confidence", a.confidence);
         Ok(Value::Object(v))
     }
@@ -552,7 +592,7 @@ fn response(events: &[Output]) -> Result<Bytes, Fault> {
     let mut map = Map::new();
     let mut answers = Vec::new();
     let mut usage = None;
-    let mut native_usage = None;
+    let mut native_usage = Map::new();
     for e in events {
         match e {
             Output::Start(s) => {
@@ -566,7 +606,9 @@ fn response(events: &[Output]) -> Result<Bytes, Fault> {
                 *usage.get_or_insert_with(Usage::default) += *u;
             }
             Output::Native(n) if &*n.format == OpenAiDecisions::NAME => {
-                native_usage = n.value.get("usage").cloned();
+                if let Some(extra) = n.value.get("usage").and_then(Value::as_object) {
+                    merge_missing(&mut native_usage, extra);
+                }
             }
             Output::Native(_) => return Err(Fault::bad_request("foreign decision event")),
             _ => (),
@@ -574,12 +616,41 @@ fn response(events: &[Output]) -> Result<Bytes, Fault> {
     }
     map.insert("answers".into(), answers.into());
     if let Some(u) = usage {
-        map.insert(
-            "usage".into(),
-            native_usage.unwrap_or_else(
-                || json!({"input_tokens":u.input_tokens,"output_tokens":u.output_tokens}),
+        let mut body = Map::new();
+        body.insert("input_tokens".into(), u.input_tokens.into());
+        body.insert("output_tokens".into(), u.output_tokens.into());
+        if native_usage.contains_key("total_tokens") {
+            body.insert(
+                "total_tokens".into(),
+                u.input_tokens.saturating_add(u.output_tokens).into(),
+            );
+        }
+        for (key, fields) in [
+            (
+                "input_tokens_details",
+                &[
+                    ("cached_tokens", u.cached_input_tokens),
+                    ("cache_write_tokens", u.cache_write_input_tokens),
+                ][..],
             ),
-        );
+            (
+                "output_tokens_details",
+                &[("reasoning_tokens", u.reasoning_tokens)][..],
+            ),
+        ] {
+            let original = native_usage.get(key).and_then(Value::as_object);
+            let mut details = Map::new();
+            for (field, value) in fields {
+                if *value > 0 || original.is_some_and(|o| o.contains_key(*field)) {
+                    details.insert((*field).into(), (*value).into());
+                }
+            }
+            if !details.is_empty() {
+                body.insert(key.into(), details.into());
+            }
+        }
+        merge_missing(&mut body, &native_usage);
+        map.insert("usage".into(), body.into());
     }
     to_bytes(&map)
 }
@@ -614,6 +685,37 @@ mod tests {
             raw
         );
     }
+    #[test]
+    fn typed_usage_and_cleared_confidence_override_native_fields() {
+        let qs = vec![json!({"type":"choice","name":"x","choices":[{"value":true}]})];
+        let raw = json!({"model":"m","answers":[{"type":"choice","name":"x","choice":true,"confidence":0.8,"probabilities":[{"value":true,"probability":1.0,"extra":"kept"}],"extra":true}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3,"extra":"kept","input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0,"extra":"input"},"output_tokens_details":{"reasoning_tokens":0,"extra":"output"}}});
+        let mut events = Vec::new();
+        answer(raw.to_string().as_bytes(), &qs, &mut events).expect("valid response");
+        for event in &mut events {
+            match event {
+                Output::Answer(a) => a.confidence = None,
+                Output::Usage(u) => {
+                    u.input_tokens = 10;
+                    u.output_tokens = 20;
+                    u.cached_input_tokens = 3;
+                    u.cache_write_input_tokens = 4;
+                    u.reasoning_tokens = 5;
+                }
+                _ => {}
+            }
+        }
+        events.push(Output::Usage(Usage::new(1, 2)));
+        let encoded: Value =
+            serde_json::from_slice(&response(&events).expect("response")).expect("json");
+        assert_eq!(
+            encoded["usage"],
+            json!({"input_tokens":11,"output_tokens":22,"total_tokens":33,"extra":"kept","input_tokens_details":{"cached_tokens":3,"cache_write_tokens":4,"extra":"input"},"output_tokens_details":{"reasoning_tokens":5,"extra":"output"}})
+        );
+        assert!(encoded["answers"][0].get("confidence").is_none());
+        assert_eq!(encoded["answers"][0]["extra"], true);
+        assert_eq!(encoded["answers"][0]["probabilities"][0]["extra"], "kept");
+    }
+
     #[test]
     fn rejects_bad_count_type_probability_and_foreign_provenance() {
         let qs = vec![json!({"type":"predicate"})];
