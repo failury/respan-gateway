@@ -225,9 +225,37 @@ fn revisions_and_translations_are_native_and_only_final_source_is_appended() {
         .iter()
         .map(|frame| serde_json::from_slice(frame).expect("JSON"))
         .collect();
+    let tokens = |frames: &[Value]| -> Vec<Value> {
+        frames
+            .iter()
+            .flat_map(|frame| {
+                frame["tokens"]
+                    .as_array()
+                    .expect("valid test output")
+                    .iter()
+                    .cloned()
+            })
+            .collect()
+    };
     assert_eq!(
-        written, frames,
-        "native response fields and revisions survive exactly once"
+        tokens(&written),
+        tokens(&frames),
+        "token order and metadata survive"
+    );
+    let extras = |frames: &[Value]| -> Vec<Value> {
+        frames
+            .iter()
+            .filter_map(|frame| {
+                let mut fields = frame.as_object().expect("valid test output").clone();
+                fields.remove("tokens");
+                (!fields.is_empty()).then_some(Value::Object(fields))
+            })
+            .collect()
+    };
+    assert_eq!(
+        extras(&written),
+        extras(&frames),
+        "frame metadata survives once in order"
     );
     provider.end(Ok(()), &mut Vec::new()).expect("finished");
 }
@@ -264,7 +292,7 @@ fn errors_are_terminal_and_eof_without_a_terminal_response_is_truncated() {
     let mut events = Vec::new();
     let error = json!({"tokens":[],"error_code":429,"error_type":"limit_exceeded","error_message":"slow down","request_id":"r1"});
     read(&mut provider, error.clone(), &mut events);
-    assert!(matches!(&events[1], Output::Error { code: Some(code), .. } if code == "429"));
+    assert!(matches!(&events[0], Output::Error { code: Some(code), .. } if code == "429"));
     let fault = provider
         .end(Ok(()), &mut Vec::new())
         .expect_err("terminal error must fail the session lifecycle");
@@ -397,4 +425,151 @@ fn soniox_path_is_a_transcription_and_belongs_to_this_format() {
         &io
     ));
     assert!(crate::session::transcribes_at(io.request().uri()));
+}
+
+#[test]
+fn typed_error_edits_and_drops_control_soniox_error_frames() {
+    let mut provider = output::Provider::default();
+    let mut events = Vec::new();
+    read(
+        &mut provider,
+        json!({"tokens":[],"error_code":401,"error_type":"unauthenticated","error_message":"private detail","request_id":"r1"}),
+        &mut events,
+    );
+    let mut client = output::Client::default();
+    let mut frames = Vec::new();
+    for event in &mut events {
+        if let Output::Error { code, message, .. } = event {
+            *code = Some("429".into());
+            *message = "safe detail".into();
+        }
+        client.write(event, &mut frames).expect("edited error");
+    }
+    let written: Vec<Value> = frames
+        .iter()
+        .map(|frame| serde_json::from_slice(frame).expect("valid test output"))
+        .collect();
+    assert_eq!(
+        written,
+        [
+            json!({"tokens":[],"error_code":429,"error_type":"unauthenticated","error_message":"safe detail","request_id":"r1"})
+        ]
+    );
+    let mut client = output::Client::default();
+    let mut frames = Vec::new();
+    for event in &events {
+        if !matches!(event, Output::Error { .. }) {
+            client.write(event, &mut frames).expect("remaining events");
+        }
+    }
+    assert!(
+        frames.is_empty(),
+        "dropping the error must not forward its original frame"
+    );
+}
+
+#[test]
+fn typed_source_filters_control_output_without_losing_native_tokens() {
+    let frame = json!({"tokens":[
+        {"text":"draft","is_final":false,"speaker":"1"},
+        {"text":"private","is_final":true,"speaker":"1","start_ms":3},
+        {"text":"hola","is_final":true,"translation_status":"translation"},
+        {"text":" data","is_final":true,"end_ms":8},
+        {"text":"<end>","is_final":true}
+    ],"finished":true,"total_audio_proc_ms":9});
+    let mut events = Vec::new();
+    read(&mut output::Provider::default(), frame, &mut events);
+    let mut edited = events.clone();
+    for event in &mut edited {
+        if let Output::InputTranscript { text, complete, .. } = event {
+            *text = if *complete {
+                "safe text"
+            } else if text == "private" {
+                "safe"
+            } else {
+                " text"
+            }
+            .into();
+        }
+    }
+    let mut client = output::Client::default();
+    let mut frames = Vec::new();
+    for event in &edited {
+        client.write(event, &mut frames).expect("valid test output");
+    }
+    let written: Vec<Value> = frames
+        .iter()
+        .map(|f| serde_json::from_slice(f).expect("valid test output"))
+        .collect();
+    let tokens: Vec<Value> = written
+        .iter()
+        .flat_map(|v| {
+            v["tokens"]
+                .as_array()
+                .expect("valid test output")
+                .iter()
+                .cloned()
+        })
+        .collect();
+    assert_eq!(
+        tokens,
+        vec![
+            json!({"text":"draft","is_final":false,"speaker":"1"}),
+            json!({"text":"safe","is_final":true,"speaker":"1","start_ms":3}),
+            json!({"text":"hola","is_final":true,"translation_status":"translation"}),
+            json!({"text":" text","is_final":true,"end_ms":8}),
+            json!({"text":"<end>","is_final":true}),
+        ]
+    );
+    assert_eq!(
+        written.last().expect("valid test output"),
+        &json!({"tokens":[],"finished":true,"total_audio_proc_ms":9})
+    );
+    let mut dropped = Vec::new();
+    let mut client = output::Client::default();
+    for event in &events {
+        if !matches!(event, Output::InputTranscript { .. }) {
+            client
+                .write(event, &mut dropped)
+                .expect("valid test output");
+        }
+    }
+    let dropped = String::from_utf8(dropped.concat()).expect("valid test output");
+    assert!(!dropped.contains("private") && !dropped.contains(" data"));
+    assert!(
+        dropped.contains("draft")
+            && dropped.contains("hola")
+            && dropped.contains("total_audio_proc_ms")
+    );
+}
+
+#[test]
+fn completion_rewrites_cannot_retract_streamed_source() {
+    let mut events = Vec::new();
+    read(
+        &mut output::Provider::default(),
+        json!({"tokens":[{"text":"secret","is_final":true},{"text":"<fin>","is_final":true}],"finished":true}),
+        &mut events,
+    );
+    let mut client = output::Client::default();
+    for event in &mut events {
+        if let Output::InputTranscript {
+            text,
+            complete: true,
+            ..
+        } = event
+        {
+            *text = "redacted".into();
+        }
+        let result = client.write(event, &mut Vec::new());
+        if matches!(event, Output::InputTranscript { complete: true, .. }) {
+            assert_eq!(
+                result.expect_err("incompatible completion").code(),
+                "untranslatable"
+            );
+            return;
+        }
+        result.expect("valid test output");
+    }
+    panic!("missing completion");
 }

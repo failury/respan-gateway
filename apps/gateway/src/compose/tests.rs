@@ -1024,11 +1024,9 @@ async fn soniox_realtime_uses_the_vendor_transport_and_preserves_translation_tok
                 .await
                 .expect("native frame")
                 .expect("frame data");
-            assert_eq!(
-                serde_json::from_slice::<Value>(&frame).expect("native result"),
-                answer
-            );
+            let first: Value = serde_json::from_slice(&frame).expect("native result");
             if failed {
+                assert_eq!(first, answer);
                 let error = body
                     .next()
                     .await
@@ -1040,7 +1038,29 @@ async fn soniox_realtime_uses_the_vendor_transport_and_preserves_translation_tok
                     StatusCode::UNAUTHORIZED
                 );
             } else {
-                assert!(body.next().await.is_none());
+                let mut frames = vec![first];
+                while let Some(frame) = body.next().await {
+                    frames.push(
+                        serde_json::from_slice::<Value>(&frame.expect("frame data"))
+                            .expect("native result"),
+                    );
+                }
+                let mut combined = serde_json::Map::new();
+                let mut tokens = Vec::new();
+                for frame in &frames {
+                    tokens.extend(frame["tokens"].as_array().expect("tokens").iter().cloned());
+                    for (key, value) in frame.as_object().expect("response object") {
+                        if key != "tokens" {
+                            assert!(
+                                combined.insert(key.clone(), value.clone()).is_none(),
+                                "frame metadata is emitted once"
+                            );
+                        }
+                    }
+                }
+                combined.insert("tokens".into(), tokens.into());
+                assert_eq!(Value::Object(combined), answer);
+                assert_eq!(frames.last().expect("terminal frame")["finished"], true);
             }
             assert_eq!(received.await.expect("provider frames").len(), 4);
             gateway.idle().await;

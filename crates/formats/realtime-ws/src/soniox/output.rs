@@ -51,7 +51,9 @@ impl Provider {
                 }
                 None => {}
             }
-            out.push(Output::native(NAME, value.clone()));
+            let mut rest = fields.clone();
+            rest.remove("error_code");
+            rest.remove("error_message");
             out.push(Output::Error {
                 cause: if code.is_client_error() {
                     Cause::Invalid
@@ -60,7 +62,7 @@ impl Provider {
                 },
                 code: Some(code.as_u16().to_string()),
                 message: message.to_owned(),
-                native: Some(NativeFields::new(NAME, fields.clone())),
+                native: Some(NativeFields::new(NAME, rest)),
             });
             self.finished = true;
             self.failure = Some(failure);
@@ -80,56 +82,60 @@ impl Provider {
                 return Err(Fault::upstream("Soniox token requires text and is_final"));
             }
         }
-        // Native clients need every revision, translated token and timing field.
-        out.push(Output::native(NAME, value.clone()));
-        let native = Some(NativeFields::new(NAME, fields.clone()));
-        let mut delta = String::new();
+        // Each stable source token is represented once by a typed delta.
+        // Its other Soniox fields stay on that event; revisions and translations
+        // have no typed form and remain native events in their original order.
         for token in tokens {
-            if token["is_final"] != true
-                || !matches!(
+            let source = token["is_final"] == true
+                && matches!(
                     token.get("translation_status").and_then(Value::as_str),
                     None | Some("none" | "original")
-                )
-            {
-                continue;
-            }
+                );
             let text = token["text"].as_str().expect("validated text");
-            if matches!(text, "<end>" | "<fin>") {
-                self.delta(&mut delta, &native, out);
-                self.complete(&native, out);
+            if !source {
+                out.push(Output::native(NAME, json!({"tokens":[token]})));
+            } else if matches!(text, "<end>" | "<fin>") {
+                if self.transcript.is_empty() {
+                    out.push(Output::native(NAME, json!({"tokens":[token]})));
+                } else {
+                    out.push(Output::InputTranscript {
+                        text: std::mem::take(&mut self.transcript),
+                        complete: true,
+                        native: json::native(NAME, json!({"tokens":[token]})),
+                    });
+                }
+            } else if !text.is_empty() {
+                self.transcript.push_str(text);
+                let mut remainder = token.clone();
+                remainder
+                    .as_object_mut()
+                    .expect("validated token")
+                    .remove("text");
+                out.push(Output::InputTranscript {
+                    text: text.to_owned(),
+                    complete: false,
+                    native: json::native(NAME, json!({"tokens":[remainder]})),
+                });
             } else {
-                delta.push_str(text);
+                out.push(Output::native(NAME, json!({"tokens":[token]})));
             }
         }
-        self.delta(&mut delta, &native, out);
         if value["finished"] == true {
-            self.complete(&native, out);
+            if !self.transcript.is_empty() {
+                out.push(Output::InputTranscript {
+                    text: std::mem::take(&mut self.transcript),
+                    complete: true,
+                    native: json::native(NAME, json!({"tokens":[]})),
+                });
+            }
             self.finished = true;
         }
+        let mut remainder = fields.clone();
+        remainder.insert("tokens".into(), json!([]));
+        if remainder.len() > 1 || tokens.is_empty() {
+            out.push(Output::native(NAME, Value::Object(remainder)));
+        }
         Ok(())
-    }
-
-    fn delta(&mut self, delta: &mut String, native: &Option<NativeFields>, out: &mut Vec<Output>) {
-        if delta.is_empty() {
-            return;
-        }
-        self.transcript.push_str(delta);
-        out.push(Output::InputTranscript {
-            text: std::mem::take(delta),
-            complete: false,
-            native: native.clone(),
-        });
-    }
-
-    fn complete(&mut self, native: &Option<NativeFields>, out: &mut Vec<Output>) {
-        if self.transcript.is_empty() {
-            return;
-        }
-        out.push(Output::InputTranscript {
-            text: std::mem::take(&mut self.transcript),
-            complete: true,
-            native: native.clone(),
-        });
     }
 }
 
@@ -164,14 +170,14 @@ impl Client {
         let value = match &event {
             Output::Native(native) => Value::clone(&native.value),
             Output::InputTranscript {
-                native: Some(native),
-                ..
-            }
-            | Output::Error {
-                native: Some(native),
-                ..
-            } if *native.format == *NAME => return Ok(()),
-            Output::InputTranscript { text, complete, .. } => {
+                text,
+                complete,
+                native,
+            } => {
+                let own = native.as_ref().filter(|native| *native.format == *NAME);
+                let template = own
+                    .and_then(|native| native.fields.get("tokens"))
+                    .and_then(Value::as_array);
                 let tokens = if *complete {
                     let suffix = text
                         .strip_prefix(&self.transcript)
@@ -180,17 +186,39 @@ impl Client {
                     if !suffix.is_empty() {
                         tokens.push(json!({"text":suffix,"is_final":true}));
                     }
-                    tokens.push(json!({"text":"<fin>","is_final":true}));
+                    if let Some(template) = template {
+                        tokens.extend(template.iter().cloned());
+                    } else {
+                        tokens.push(json!({"text":"<fin>","is_final":true}));
+                    }
                     self.transcript.clear();
                     tokens
                 } else {
                     self.transcript.push_str(text);
-                    vec![json!({"text":text,"is_final":true})]
+                    let mut token = json!({"text":text,"is_final":true});
+                    if let Some(Value::Object(extra)) = template.and_then(|tokens| tokens.first()) {
+                        json::merge(&mut token, Some(extra));
+                    }
+                    vec![token]
                 };
+                if tokens.is_empty() {
+                    return Ok(());
+                }
                 json!({"tokens":tokens})
             }
-            Output::Error { code, message, .. } => {
-                json!({"tokens":[],"error_code":code.as_deref().and_then(|code| code.parse::<u64>().ok()).unwrap_or(500),"error_message":message})
+            Output::Error {
+                code,
+                message,
+                native,
+                ..
+            } => {
+                let mut value = json!({"error_code":code.as_deref().and_then(|code| code.parse::<u64>().ok()).unwrap_or(500),"error_message":message});
+                if let Some(native) = native.as_ref().filter(|native| *native.format == *NAME) {
+                    json::merge(&mut value, Some(&native.fields));
+                } else {
+                    value["tokens"] = json!([]);
+                }
+                value
             }
             Output::Opened(_) | Output::Updated(_) | Output::Usage(_) => return Ok(()),
             _ => return Err(untranslatable_output(NAME, "this event")),

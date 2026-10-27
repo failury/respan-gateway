@@ -24,7 +24,11 @@ a format per spec:
   according to Soniox's timeout rules; WebSocket pings do not replace it.
   Source tokens become typed transcripts only when final. Revisable tokens,
   translated tokens, timings and speaker labels survive in native
-  responses. Translation to a different client protocol is refused.
+  responses. A Soniox response may be split into multiple frames, preserving
+  token order and native fields. Filters must edit or drop both a turn's
+  deltas and its cumulative completion consistently; a completion that
+  would retract already written text fails as untranslatable. Translation
+  to a different client protocol is refused.
   Audio processing milliseconds remain native and are never token usage.
   Terminal errors are relayed once, then fail session completion with the
   provider's HTTP status and `error_type` for logging.
