@@ -32,6 +32,10 @@ use respan_gateway_http::{All, ClientIo, Decoder, Encoder, ProviderIo, Whole};
 use respan_gateway_http::{Connect, Upstream};
 use serde_json::{Map, Value, json};
 
+mod openai;
+
+pub use openai::OpenAiDecisions;
+
 const NAME: &str = "decisions";
 const PATH: &str = "/decisions";
 /// TypeSafe's name for the endpoint, which its clients call.
@@ -209,18 +213,8 @@ fn decode_question(id: String, v: Value) -> Result<Question, Fault> {
 
 /// The call of `input`.
 fn encode_request(input: &Input) -> Result<Map<String, Value>, Fault> {
-    if input.native.as_ref().is_some_and(|n| &*n.format != NAME) {
-        return Err(Fault::bad_request(
-            "foreign decision evidence cannot be written as decisions",
-        ));
-    }
     let mut questions = Map::new();
     for q in &input.questions {
-        if q.native.as_ref().is_some_and(|n| &*n.format != NAME) {
-            return Err(Fault::bad_request(
-                "foreign question cannot be written as decisions",
-            ));
-        }
         let mut v = Map::new();
         let (kind, criteria) = match &q.ask {
             Ask::Noul { yes, no } => {
@@ -343,11 +337,6 @@ fn encode_response(events: &[Output]) -> Result<Bytes, Fault> {
     for event in events {
         match event {
             Output::Start(start) => {
-                if start.native.as_ref().is_some_and(|n| &*n.format != NAME) {
-                    return Err(Fault::bad_request(
-                        "foreign response cannot be written as decisions",
-                    ));
-                }
                 set(&mut body, "model", start.model.clone());
                 merge_missing(&mut body, &kept(NAME, &start.native)?);
             }
@@ -386,11 +375,6 @@ fn encode_response(events: &[Output]) -> Result<Bytes, Fault> {
 
 /// An answer as the contract writes it.
 fn encode_answer(answer: &Answer) -> Result<Map<String, Value>, Fault> {
-    if answer.native.as_ref().is_some_and(|n| &*n.format != NAME) {
-        return Err(Fault::bad_request(
-            "foreign answer cannot be written as decisions",
-        ));
-    }
     let mut v = Map::new();
     match &answer.verdict {
         Verdict::Noul(p) => {
@@ -543,6 +527,3 @@ mod tests {
         assert!(refused.is_err_and(|f| f.is(FaultKind::Provider)));
     }
 }
-
-mod openai;
-pub use openai::OpenAiDecisions;

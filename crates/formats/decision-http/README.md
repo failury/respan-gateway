@@ -23,10 +23,21 @@ An answer of a type the kind has no form for is kept and written back where
 it was. A refusal is `{"error": {"message", "type", "code"}}`, whose message
 TypeSafe's SDKs read.
 
-`OpenAiDecisions` uses the OpenAI `input` and ordered `questions` array
-contract. Its reusable client defaults to `/v1/decisions`; applications can
-choose a distinct path with `OpenAiDecisions::serving`. The standalone gateway
-uses `/openai/v1/decisions` to preserve its existing Decisions endpoint.
-The Azure dialect sends the key in `api-key` and calls `/decisions` relative
-to the configured v1 base. Boolean choice values remain distinct from strings;
-per-question refusals and provider usage retain their meaning.
+`OpenAiDecisions`, named `openai-decisions`: OpenAI's contract, evidence as
+`input` and questions and answers as ordered lists. Its clients are served at
+`/v1/decisions`, or at another path (`OpenAiDecisions::serving`): the
+standalone gateway serves them at `/openai/v1/decisions`, beside `decisions`.
+
+- It reads into the kind and writes from it, so either format's client is
+  served by either's provider. A question's id is its `name`, or its
+  position for one unnamed or named as one before it, and a provider is sent
+  each question named for its id. Evidence another format gave as JSON is
+  sent as its JSON text; a predicate with criteria is refused, 400.
+- An answer is read against the question at its position: one out of turn,
+  of another type than the question's but a `refusal`, or unreadable is the
+  provider's fault. A client is answered from its own request, so its names
+  and levels' labels are as it asked them.
+- Boolean choices stay apart from strings, and `decisions`, whose choices
+  are named, refuses them, as it refuses a refusal.
+- Azure (`vendor = "azure"`) serves it in its dialect: the key in `api-key`,
+  called at `/decisions` under the configured v1 base.

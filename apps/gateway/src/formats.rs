@@ -213,6 +213,8 @@ mod endpoints {
     ];
     pub const SPEECH: &[&str] = &["POST /v1/audio/speech"];
     pub const EMBEDDINGS: &[&str] = &["POST /v1/embeddings"];
+    /// OpenAI's decisions, beside the ones `/v1/decisions` has.
+    pub const OPENAI_DECISIONS_PATH: &str = "/openai/v1/decisions";
     pub const OPENAI_DECISIONS: &[&str] = &["POST /openai/v1/decisions"];
     pub const DECISIONS: &[&str] = &["POST /v1/decisions", "POST /v1/systemone"];
     pub const VIDEOS: &[&str] = &[
@@ -293,7 +295,7 @@ pub fn formats() -> Vec<KnownFormat> {
         KnownFormat::of(
             kind::DECISION,
             endpoints::OPENAI_DECISIONS,
-            OpenAiDecisions::serving("/openai/v1/decisions"),
+            OpenAiDecisions::serving(endpoints::OPENAI_DECISIONS_PATH),
         )
         .model(Model::of(
             decision::Input::model,
@@ -303,8 +305,10 @@ pub fn formats() -> Vec<KnownFormat> {
     ]
 }
 
+/// Whether a request is for `decisions`, not OpenAI's at its own path.
 fn legacy_decisions(_: &Routes, io: &ClientIo) -> bool {
-    io.request().uri().path() != "/openai/v1/decisions"
+    let uri = io.request().uri();
+    !respan_gateway_http::path::path_ends_with(uri, endpoints::OPENAI_DECISIONS_PATH)
 }
 
 /// Whether a `generateContent` call is for an image ([`drawn_elsewhere`]).

@@ -866,9 +866,13 @@ async fn azure_decisions_uses_the_reserved_path_and_api_key() {
         headers: http::HeaderMap,
         Json(body): Json<Value>,
     ) -> Json<Value> {
+        // An answer per question, echoing its name, as Azure answers.
+        let answers: Vec<Value> = (body["questions"].as_array().into_iter().flatten())
+            .map(|q| json!({"type": "predicate", "name": q["name"], "probability": 0.7}))
+            .collect();
         seen.lock().expect("capture").push((headers, body));
         Json(
-            json!({"model":"deployment", "answers":[{"type":"predicate","name":null,"probability":0.7}], "usage":{"input_tokens":4,"output_tokens":0}}),
+            json!({"model":"deployment", "answers": answers, "usage":{"input_tokens":4,"output_tokens":0}}),
         )
     }
     let seen: Captured = Arc::default();
@@ -907,11 +911,18 @@ async fn azure_decisions_uses_the_reserved_path_and_api_key() {
         let bad = json!({"model":"azure/deployment", "state":"hello", "questions":{}});
         let (resp, _) = serve(&gateway, post("/openai/v1/decisions", bad.to_string())).await;
         assert_eq!(read_whole(resp).await.0, StatusCode::BAD_REQUEST);
+        // A client of `decisions` is asked of Azure in its contract.
+        let legacy = json!({"model":"azure/deployment", "state":"hello", "questions":{"spam":{"type":"noul","instructions":"Is it spam?"}}});
+        let (resp, _) = serve(&gateway, post("/v1/decisions", legacy.to_string())).await;
+        let (status, _, body) = read_whole(resp).await;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        let result: Value = serde_json::from_slice(&body.expect("response body")).expect("json");
+        assert_eq!(result["answers"]["spam"]["noul"], 0.7);
         gateway.idle().await;
     }
     {
         let captured = seen.lock().expect("capture");
-        assert_eq!(captured.len(), 2);
+        assert_eq!(captured.len(), 4);
         for (headers, body) in captured.iter() {
             assert_eq!(
                 headers.get("api-key").and_then(|v| v.to_str().ok()),
