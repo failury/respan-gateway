@@ -13,7 +13,7 @@ use respan_gateway_conversation_http::openai::OpenAiChat;
 use respan_gateway_conversation_http::responses::OpenAiResponses;
 use respan_gateway_core::{Fault, Format, Gateway};
 use respan_gateway_decision as decision;
-use respan_gateway_decision_http::Decisions;
+use respan_gateway_decision_http::{Decisions, OpenAiDecisions};
 use respan_gateway_http::{ClientIo, ProviderIo, raw::Original};
 use respan_gateway_media::{embedding, image, speech, transcription, video};
 use respan_gateway_media_http::gemini::{GeminiImages, GeminiVeo};
@@ -213,6 +213,7 @@ mod endpoints {
     ];
     pub const SPEECH: &[&str] = &["POST /v1/audio/speech"];
     pub const EMBEDDINGS: &[&str] = &["POST /v1/embeddings"];
+    pub const OPENAI_DECISIONS: &[&str] = &["POST /openai/v1/decisions"];
     pub const DECISIONS: &[&str] = &["POST /v1/decisions", "POST /v1/systemone"];
     pub const VIDEOS: &[&str] = &[
         "POST /v1/videos",
@@ -279,12 +280,31 @@ pub fn formats() -> Vec<KnownFormat> {
         KnownFormat::of(kind::VIDEO, endpoints::VEO, GeminiVeo)
             .job_ids("veo_")
             .model(Model::of(video::Input::model, video::Input::set_model)),
-        KnownFormat::of(kind::DECISION, endpoints::DECISIONS, Decisions).model(Model::of(
+        KnownFormat::claiming(
+            kind::DECISION,
+            endpoints::DECISIONS,
+            Decisions,
+            legacy_decisions,
+        )
+        .model(Model::of(
+            decision::Input::model,
+            decision::Input::set_model,
+        )),
+        KnownFormat::of(
+            kind::DECISION,
+            endpoints::OPENAI_DECISIONS,
+            OpenAiDecisions::serving("/openai/v1/decisions"),
+        )
+        .model(Model::of(
             decision::Input::model,
             decision::Input::set_model,
         )),
         KnownFormat::of(kind::PASSTHROUGH, endpoints::PASSTHROUGH, Passthrough),
     ]
+}
+
+fn legacy_decisions(_: &Routes, io: &ClientIo) -> bool {
+    io.request().uri().path() != "/openai/v1/decisions"
 }
 
 /// Whether a `generateContent` call is for an image ([`drawn_elsewhere`]).

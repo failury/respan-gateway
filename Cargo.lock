@@ -1685,6 +1685,7 @@ dependencies = [
  "respan-gateway-core",
  "respan-gateway-decision",
  "respan-gateway-http",
+ "serde",
  "serde_json",
 ]
 
@@ -2132,6 +2133,7 @@ dependencies = [
  "respan-gateway-conversation",
  "respan-gateway-conversation-http",
  "respan-gateway-core",
+ "respan-gateway-decision",
  "respan-gateway-decision-http",
  "respan-gateway-http",
  "respan-gateway-media",
