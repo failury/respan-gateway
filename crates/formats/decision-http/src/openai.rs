@@ -521,7 +521,7 @@ fn answer(raw: &[u8], questions: &[Value], out: &mut Vec<Output>) -> Result<(), 
 impl OpenAiDecisions {
     /// Serialize an answer using the OpenAI Decisions contract.
     pub fn answer_value(a: &Answer) -> Result<Value, Fault> {
-        let mut v = own(&a.native)?;
+        let mut v = kept(OpenAiDecisions::NAME, &a.native)?;
         match &a.verdict {
             Verdict::Noul(p) => {
                 v.insert("type".into(), "predicate".into());
@@ -596,7 +596,7 @@ fn response(events: &[Output]) -> Result<Bytes, Fault> {
     for e in events {
         match e {
             Output::Start(s) => {
-                merge_missing(&mut map, &own(&s.native)?);
+                merge_missing(&mut map, &kept(OpenAiDecisions::NAME, &s.native)?);
                 set(&mut map, "model", s.model.clone());
             }
             Output::Answer(a) => {
@@ -658,6 +658,41 @@ fn response(events: &[Output]) -> Result<Bytes, Fault> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_plugin_reply_needs_no_native_fields() {
+        let answer = Answer::new("0", Verdict::Noul(0.7));
+        let expected = json!({"type":"predicate","probability":0.7});
+        assert_eq!(
+            OpenAiDecisions::answer_value(&answer).expect("typed answer"),
+            expected
+        );
+        let events = vec![
+            Output::Start(Start::new(Some("m".into()))),
+            Output::Answer(answer),
+            Output::Usage(Usage::new(0, 0)),
+        ];
+        let actual: Value =
+            serde_json::from_slice(&response(&events).expect("typed response")).expect("JSON");
+        assert_eq!(
+            actual,
+            json!({"model":"m","answers":[expected],"usage":{"input_tokens":0,"output_tokens":0}})
+        );
+    }
+
+    #[test]
+    fn foreign_native_output_is_rejected() {
+        let native = Some(NativeFields::new(
+            "foreign",
+            Map::from_iter([("extra".into(), true.into())]),
+        ));
+        let mut answer = Answer::new("0", Verdict::Noul(0.7));
+        answer.native = native.clone();
+        assert!(OpenAiDecisions::answer_value(&answer).is_err());
+        let mut start = Start::new(Some("m".into()));
+        start.native = native;
+        assert!(response(&[Output::Start(start)]).is_err());
+    }
+
     #[test]
     fn typed_choices_and_order_round_trip() {
         let raw = json!({"model":"deployment","input":[{"role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_image","image_url":"https://example.com/a.png"}]}],"questions":[{"type":"predicate","instructions":"a"},{"type":"choice","name":"same","instructions":"b","choices":[{"value":true},{"value":"true"}]},{"type":"score","name":"same","instructions":"c","levels":[{"label":"low"},{"label":"high"}]}]});
