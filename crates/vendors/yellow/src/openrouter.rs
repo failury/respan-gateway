@@ -723,6 +723,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn opaque_video_job_followups_reach_the_creating_provider() {
+        video_owner_after_dispatch(false).await;
+    }
+
+    #[tokio::test]
+    async fn video_job_uses_actual_provider_after_dispatch() {
+        video_owner_after_dispatch(true).await;
+    }
+
+    async fn video_owner_after_dispatch(late_dispatch: bool) {
+        use respan_gateway_core::{ClientContext, Plugin, Response, async_trait};
+
+        struct RouteCreate(bool);
+        #[async_trait]
+        impl Plugin for RouteCreate {
+            async fn on_client(&self, cx: &mut ClientContext) -> Result<Option<Response>, Fault> {
+                if matches!(cx.input::<video::Input>(), Ok(video::Input::Create(_))) {
+                    if self.0 {
+                        return Ok(Some(cx.call("openrouter").await?));
+                    }
+                    cx.set_target("openrouter");
+                }
+                Ok(None)
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector = |name: &'static str| {
+            let calls = calls.clone();
+            respan_gateway_http::connect(
+                move |request: http::Request<Body>| {
+                    let calls = calls.clone();
+                    async move {
+                        let path = request.uri().path().to_owned();
+                        calls.lock().expect("calls").push((name, path.clone()));
+                        let body = if path.ends_with("/content") {
+                            "video bytes".to_owned()
+                        } else {
+                            json!({"id":"abc123", "status":"pending"}).to_string()
+                        };
+                        Ok((http::Response::new(Body::full(body)), None))
+                    }
+                },
+                1 << 20,
+            )
+        };
+        let (format, _) = VENDOR.format(OpenAiVideos::NAME).expect("format");
+        let gateway = Gateway::new()
+            .provider(format.provider("openrouter".into(), Arc::new(connector("openrouter"))))
+            .expect("provider")
+            .provider(format.provider("other".into(), Arc::new(connector("other"))))
+            .expect("provider")
+            .client::<video::Input, video::Output, _>(OpenAiVideos)
+            .expect("client");
+        let jobs = video::VideoJobs::new()
+            .provider("openrouter", "openrouter", "video_")
+            .provider("other", "other", "veo_");
+        let gateway = if late_dispatch {
+            gateway.plugin(jobs).plugin(RouteCreate(true))
+        } else {
+            gateway.plugin(RouteCreate(false)).plugin(jobs)
+        };
+        let gateway = gateway.target("other").expect("target");
+        let (_, body, done) =
+            post(&gateway, "/v1/videos", json!({"prompt":"wave","seconds":4})).await;
+        done.expect("created");
+        let created: Value = serde_json::from_slice(&body).expect("job");
+        assert_eq!(created["id"], "openrouter~abc123");
+        for path in [
+            "/v1/videos/openrouter~abc123",
+            "/v1/videos/openrouter~abc123/content",
+        ] {
+            let (_, _, done) =
+                send(&gateway, http::Method::GET, path, "application/json", "").await;
+            done.expect("follow-up");
+        }
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            [
+                ("openrouter", "/videos".to_owned()),
+                ("openrouter", "/videos/abc123".to_owned()),
+                ("openrouter", "/videos/abc123/content".to_owned()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn video_page_after_opaque_id_reaches_owner_unwrapped() {
+        use respan_gateway_http::Upstream;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector = |name: &'static str| {
+            let calls = calls.clone();
+            respan_gateway_http::connect(
+                move |request: http::Request<Body>| {
+                    let calls = calls.clone();
+                    async move {
+                        calls
+                            .lock()
+                            .expect("calls")
+                            .push((name, request.uri().to_string()));
+                        let body = json!({"object":"list", "data":[
+                        {"id":"opaque-next", "status":"queued"},
+                        {"id":"video_123", "status":"queued"}
+                    ], "has_more":false});
+                        Ok((http::Response::new(Body::full(body.to_string())), None))
+                    }
+                },
+                1 << 20,
+            )
+        };
+        let gateway = Gateway::new()
+            .provider(OpenAiVideos.provider("owner".into(), Arc::new(connector("owner"))))
+            .expect("owner")
+            .provider(OpenAiVideos.provider("other".into(), Arc::new(connector("other"))))
+            .expect("other")
+            .client::<video::Input, video::Output, _>(OpenAiVideos)
+            .expect("client")
+            .plugin(
+                video::VideoJobs::new()
+                    .provider("owner", "owner", "video_")
+                    .provider("other", "other", "veo_"),
+            )
+            .target("other")
+            .expect("target");
+        let (_, body, done) = send(
+            &gateway,
+            http::Method::GET,
+            "/v1/videos?after=owner~abc123",
+            "application/json",
+            "",
+        )
+        .await;
+        done.expect("page");
+        let page: Value = serde_json::from_slice(&body).expect("page json");
+        assert_eq!(page["data"][0]["id"], "owner~opaque-next");
+        assert_eq!(page["data"][1]["id"], "video_123");
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            [("owner", "/videos?after=abc123".to_owned())]
+        );
+    }
+
+    #[tokio::test]
     async fn image_masks_are_refused_before_the_http_call() {
         let (gateway, calls) = gateway(OpenAiImages::NAME, "application/json", "{}");
         let (status, _, _) = post(&gateway, "/v1/images/edits", json!({"prompt":"edit","images":[{"image_url":"https://example.test/ref.png"}],"mask":{"image_url":"data:image/png;base64,eA=="}})).await;
